@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GrooveMatch</title>
+<style>
+  :root{
+    --blue:#2563eb; --blue-100:#e6efff; --downbeat-bg:#f3f6ff;
+    --line:#d6d6d6; --text:#222; --muted:#666; --bg:#f9fafb;
+    --cell:40px; --gap:5px; --radius:8px;
+  }
+  body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+       text-align:center;background:var(--bg);color:var(--text);padding:24px;}
+  h1{font-size:36px;margin:6px 0 16px;letter-spacing:0.4px;font-weight:800;}
+  .app{max-width:min(100vw - 24px, 900px);margin:0 auto;background:#fff;border:1px solid #eee;
+       border-radius:16px;box-shadow:0 6px 20px rgba(0,0,0,0.06);padding:18px 14px 22px;}
+
+  .label-grid{display:grid;grid-template-columns:repeat(16,var(--cell));gap:var(--gap);
+              justify-content:center;margin:4px 0 8px;user-select:none}
+  .label-box{width:var(--cell);height:24px;display:flex;align-items:center;justify-content:center;
+             font-size:12px;color:#666;border:1px solid var(--bg);border-radius:var(--radius)}
+  .label-box.beat{font-weight:800;color:#000}
+
+  .rows{display:flex;flex-direction:column;gap:var(--gap);justify-content:center;user-select:none}
+  .row{display:grid;grid-template-columns:repeat(16,var(--cell));gap:var(--gap)}
+  .cell{width:var(--cell);height:var(--cell);border:1px solid var(--line);border-radius:var(--radius);
+        background:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;
+        cursor:pointer;transition:transform 80ms ease, background 120ms ease, box-shadow 120ms ease, outline-color 120ms ease;
+        box-shadow:0 1px 0 rgba(0,0,0,0.02);font-size:1.05rem}
+  .cell.beat-col{background:var(--downbeat-bg)}
+  .cell:hover{transform:translateY(-1px);box-shadow:0 4px 10px rgba(0,0,0,0.06)}
+  .cell.playing{outline:2px solid var(--blue);outline-offset:-2px;background:var(--blue-100)}
+  .cell.note{color:#111}
+  .cell.accent{background:#eef3ff;border-color:#b8ccff}
+
+  .legend{display:flex;gap:12px;justify-content:center;color:#444;font-size:12px;margin:8px 0 14px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .dot{font-size:18px}.x{font-size:16px}
+
+  .controls{display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap;margin-top:8px}
+  .controls input[type=number]{width:90px;padding:8px 10px;border:1px solid #d6d6d6;border-radius:10px;font-size:14px}
+  .btn{background:var(--blue);color:#fff;border:none;border-radius:12px;padding:10px 16px;font-weight:600;cursor:pointer}
+  .btn.secondary{background:#111}
+  #results{margin-top:16px;font-size:14px;color:#333}
+  footer{margin-top:10px;color:#888;font-size:12px}
+  @media (max-width:480px){:root{--cell:32px;--gap:4px}.label-box{font-size:11px;height:20px}}
+</style>
+</head>
+<body>
+  <div class="app">
+    <h1>GrooveMatch</h1>
+
+    <!-- Labels perfectly aligned to columns -->
+    <div class="label-grid" id="labels"></div>
+
+    <!-- 3 drum rows -->
+    <div class="rows" id="rows"></div>
+
+    <div class="legend">
+      <span><span class="x">x</span> Hi-Hat</span>
+      <span><span class="dot">●</span> Snare/Kick</span>
+      <span>Tap: empty → note → accent</span>
+    </div>
+
+    <div class="controls">
+      <label for="tempo">Tempo</label>
+      <input type="number" id="tempo" value="100" min="40" max="240" />
+      <button class="btn" id="playBtn" aria-pressed="false">Play</button>
+      <button class="btn secondary" id="findBtn">Find Song Examples</button>
+    </div>
+    <div id="results"></div>
+
+    <footer>Prototype • v0.6</footer>
+  </div>
+
+  <!-- Sounds -->
+  <audio id="kickSound" src="https://freesound.org/data/previews/20/20059_51564-lq.mp3" preload="auto"></audio>
+  <audio id="snareSound" src="https://freesound.org/data/previews/20/20062_51564-lq.mp3" preload="auto"></audio>
+  <audio id="hatSound" src="https://freesound.org/data/previews/20/20060_51564-lq.mp3" preload="auto"></audio>
+
+<script>
+const COLS=16, ROWS=3; // 0=HH,1=Snare,2=Kick
+
+// Build labels (bold 1,2,3,4)
+const labelText=["1","e","&","a","2","e","&","a","3","e","&","a","4","e","&","a"];
+const labelsEl=document.getElementById("labels");
+labelText.forEach((t,i)=>{
+  const d=document.createElement("div");
+  d.className="label-box"+(i%4===0?" beat":"");
+  d.textContent=t;
+  labelsEl.appendChild(d);
+});
+
+// Build rows
+const rowsWrap=document.getElementById("rows");
+const gridState=Array.from({length:ROWS},()=>Array(COLS).fill(0)); // 0 empty, 1 note, 2 accent
+for(let r=0;r<ROWS;r++){
+  const row=document.createElement("div"); row.className="row";
+  for(let c=0;c<COLS;c++){
+    const cell=document.createElement("div");
+    cell.className="cell"+(c%4===0?" beat-col":"");
+    cell.dataset.row=r; cell.dataset.col=c;
+
+    // default HH every other 16th
+    if(r===0 && c%2===0){ cell.textContent="x"; cell.classList.add("note"); gridState[r][c]=1; }
+
+    cell.addEventListener("click",()=>{
+      const rr=+cell.dataset.row, cc=+cell.dataset.col;
+      gridState[rr][cc]=(gridState[rr][cc]+1)%3; // 0 -> 1 -> 2 -> 0
+      applyCellVisual(cell, rr);
+    });
+
+    row.appendChild(cell);
+  }
+  rowsWrap.appendChild(row);
+}
+
+function applyCellVisual(cell,r){
+  const state=gridState[r][+cell.dataset.col];
+  cell.classList.remove("note","accent");
+  if(state===0){ cell.textContent=""; }
+  else if(state===1){ cell.classList.add("note"); cell.textContent=(r===0)?"x":"●"; }
+  else if(state===2){ cell.classList.add("accent"); cell.textContent=(r===0)?"x":"●"; }
+}
+
+// Playback
+let intervalId=null, step=0;
+const kick=document.getElementById("kickSound"),
+      snare=document.getElementById("snareSound"),
+      hat=document.getElementById("hatSound");
+
+function setPlayingColumn(col){
+  document.querySelectorAll(".cell.playing").forEach(el=>el.classList.remove("playing"));
+  document.querySelectorAll(`.cell[data-col="${col}"]`).forEach(el=>el.classList.add("playing"));
+}
+function tick(){
+  setPlayingColumn(step);
+  for(let r=0;r<ROWS;r++){
+    const s=gridState[r][step];
+    if(s>0){
+      const acc=(s===2);
+      if(r===0){ hat.volume=acc?1.0:0.7; hat.currentTime=0; hat.play(); }
+      if(r===1){ snare.volume=acc?1.0:0.8; snare.currentTime=0; snare.play(); }
+      if(r===2){ kick.volume=acc?1.0:0.85; kick.currentTime=0; kick.play(); }
+    }
+  }
+  step=(step+1)%COLS;
+}
+function playGroove(){
+  const tempo=parseInt(document.getElementById("tempo").value)||100;
+  const interval=(60/tempo)*1000/4; // 16ths
+  step=0; tick(); intervalId=setInterval(tick, interval);
+}
+const playBtn=document.getElementById("playBtn");
+playBtn.addEventListener("click",()=>{
+  if(intervalId){ clearInterval(intervalId); intervalId=null;
+    document.querySelectorAll(".cell.playing").forEach(el=>el.classList.remove("playing"));
+    playBtn.textContent="Play"; playBtn.setAttribute("aria-pressed","false");
+  }else{
+    playGroove(); playBtn.textContent="Stop"; playBtn.setAttribute("aria-pressed","true");
+  }
+});
+// placeholder
+document.getElementById("findBtn").addEventListener("click",()=>{
+  document.getElementById("results").textContent="Song database coming soon.";
+});
+</script>
+</body>
+</html>
